@@ -7,6 +7,14 @@ from pathlib import Path
 
 import gradio as gr
 
+# Import cookie-creator integration
+try:
+    from cookie_creator.ytdlp_integration import YtDlpCookieIntegration
+    COOKIE_CREATOR_AVAILABLE = True
+except ImportError:
+    COOKIE_CREATOR_AVAILABLE = False
+    print("Warning: cookie-creator not available. Fresh cookie generation will be disabled.")
+
 OUTPUT_DIR = Path("/tmp/yt_downloader_outputs")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -54,7 +62,7 @@ def build_yt_dlp_cmd(url: str, target_format: str, quality: str, use_browser_coo
 
     return cmd
 
-def run_download(url: str, target_format: str, quality: str, auto_cookies: bool, cookies_file, advanced_opts: str):
+def run_download(url: str, target_format: str, quality: str, auto_cookies: bool, cookies_file, advanced_opts: str, generate_fresh_cookies: bool = False):
     """
     Perform download and return path to a zip containing the resulting file(s) or an error string.
     """
@@ -62,9 +70,28 @@ def run_download(url: str, target_format: str, quality: str, auto_cookies: bool,
     if not url or not url.strip():
         return None, "Please provide a URL."
 
-    # Save uploaded cookies file if provided
+    # Handle cookie generation and file management
     cookies_path = ""
-    if cookies_file is not None:
+    temp_cookie_files = []  # Track temporary files for cleanup
+    
+    # Generate fresh cookies if requested
+    if generate_fresh_cookies:
+        if not COOKIE_CREATOR_AVAILABLE:
+            return None, "Cookie generation is not available. The cookie-creator module is not installed."
+        
+        try:
+            # Create cookie integration instance
+            cookie_integration = YtDlpCookieIntegration()
+            
+            # Visit the URL and generate cookies
+            cookies_path = cookie_integration.prepare_cookies_for_url(url, visit_first=True)
+            temp_cookie_files.append(cookies_path)
+            
+        except Exception as e:
+            return None, f"Failed to generate fresh cookies: {e}"
+    
+    # Save uploaded cookies file if provided (and not using fresh generation)
+    elif cookies_file is not None:
         # cookies_file is a tempfile-like object with a 'name' attribute or tuple (name, file)
         try:
             # gradio provides a dict-like object for files on some setups; handle common cases
@@ -76,6 +103,7 @@ def run_download(url: str, target_format: str, quality: str, auto_cookies: bool,
             with open(dest, "wb") as out_f, open(fp.name, "rb") as in_f:
                 out_f.write(in_f.read())
             cookies_path = str(dest)
+            temp_cookie_files.append(cookies_path)
         except Exception as e:
             return None, f"Failed to save uploaded cookies file: {e}"
 
@@ -122,6 +150,14 @@ def run_download(url: str, target_format: str, quality: str, auto_cookies: bool,
         for p in results:
             zf.write(p, arcname=p.name)
 
+    # Cleanup temporary cookie files
+    for temp_file in temp_cookie_files:
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except Exception as e:
+            print(f"Warning: Failed to cleanup temporary cookie file {temp_file}: {e}")
+
     return str(zip_path), "Download completed successfully."
 
 
@@ -129,10 +165,14 @@ title = "Universal Video Downloader — yt-dlp + Gradio"
 description = """
 Download videos from YouTube, TikTok, Vimeo, Reddit and more using yt-dlp.
 Supports output formats: mp4, webm (video), mp3, m4a, wav (audio).
-Options:
+Cookie Options:
  - Auto-grab cookies from local browser (for age-restricted/private videos)
+ - Generate fresh cookies by visiting the site first (helps with restricted content)
  - Upload a cookies.txt file (Netscape cookie format)
  - Advanced options: raw yt-dlp arguments
+
+The fresh cookie generation option visits the target website to collect current cookies,
+which can be especially useful for accessing content that requires recent authentication.
 """
 
 with gr.Blocks(title=title) as demo:
@@ -146,6 +186,13 @@ with gr.Blocks(title=title) as demo:
     with gr.Row():
         quality = gr.Dropdown(choices=["best","2160","1440","1080","720","480","360"], value="best", label="Max quality (height px)")
         auto_cookies = gr.Checkbox(label="Auto-grab cookies from browser (try chrome)", value=True)
+        
+    with gr.Row():
+        generate_cookies = gr.Checkbox(
+            label="Generate fresh cookies (visit site first)", 
+            value=False,
+            info="Visit the target website to collect current cookies - useful for restricted content"
+        )
         cookies_file = gr.File(label="Or upload cookies.txt (Netscape format)", file_count="single")
 
     advanced_opts = gr.Textbox(label="Advanced yt-dlp options (raw)", placeholder='e.g. --playlist-items 1-3 --no-check-certificate', lines=2)
@@ -154,16 +201,16 @@ with gr.Blocks(title=title) as demo:
     status = gr.Textbox(label="Status", interactive=False)
     result_file = gr.File(label="Result (zip)", interactive=False)
 
-    def on_download(url, fmt, q, ac, cf, adv):
+    def on_download(url, fmt, q, ac, cf, adv, gc):
         status.value = "Starting..."
-        result, msg = run_download(url, fmt, q, ac, cf, adv)
+        result, msg = run_download(url, fmt, q, ac, cf, adv, gc)
         status.value = msg
         if result:
             return gr.update(value=result), status.value
         else:
             return None, status.value
 
-    download_btn.click(on_download, inputs=[url_in, format_sel, quality, auto_cookies, cookies_file, advanced_opts], outputs=[result_file, status])
+    download_btn.click(on_download, inputs=[url_in, format_sel, quality, auto_cookies, cookies_file, advanced_opts, generate_cookies], outputs=[result_file, status])
 
 if __name__ == '__main__':
     demo.launch(server_name='0.0.0.0', server_port=7860)

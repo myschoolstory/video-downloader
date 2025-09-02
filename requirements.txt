@@ -2,3 +2,5 @@ gradio
 yt-dlp
 ffmpeg-python
 browser_cookie3
+requests
+-e ./cookie-creator

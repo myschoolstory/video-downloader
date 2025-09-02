@@ -14,6 +14,7 @@ WORKDIR /app
 
 # Copy files
 COPY requirements.txt /app/requirements.txt
+COPY cookie-creator/ /app/cookie-creator/
 COPY app.py /app/app.py
 COPY README.md /app/README.md
 

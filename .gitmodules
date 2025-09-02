@@ -1,0 +1,3 @@
+[submodule "cookie-creator"]
+	path = cookie-creator
+	url = https://github.com/myschoolstory/cookie-creator
